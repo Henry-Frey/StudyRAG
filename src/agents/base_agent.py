@@ -76,3 +76,9 @@ class BaseAgent(ABC):
                 )
 
         return list(seen.values())
+
+    def _truncate_context(self, context: str, max_chars: int = 4000) -> str:
+        """Truncate context to avoid exceeding model context window."""
+        if len(context) <= max_chars:
+            return context
+        return context[:max_chars] + "\n... [truncated]"

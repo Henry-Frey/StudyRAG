@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api", tags=["StudyRAG"])
 # -- request / response models ------------------------------------------------
 
 class ChatRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=2000)
+    query: str = Field(..., min_length=1, max_length=4000)
     agent_type: str = Field(default="explainer")
     collection_name: Optional[str] = Field(default=None)
 

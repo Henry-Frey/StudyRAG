@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 import requests
 import streamlit as st
 
-BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
+BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000").rstrip("/")
 API_CHAT = f"{BACKEND_URL}/api/chat"
 API_UPLOAD = f"{BACKEND_URL}/api/upload"
 API_COLLECTIONS = f"{BACKEND_URL}/api/collections"

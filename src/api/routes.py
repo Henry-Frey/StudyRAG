@@ -309,3 +309,10 @@ async def health_check(request: Request) -> HealthResponse:
         gpu_available=torch.cuda.is_available(),
         collections_count=collections_count,
     )
+
+# -- version endpoint ---------------------------------------------------------
+
+@router.get("/version")
+async def get_version():
+    """Return API version info."""
+    return {"version": "0.1.0", "name": "StudyRAG"}

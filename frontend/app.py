@@ -31,7 +31,7 @@ AGENT_OPTIONS: Dict[str, Dict[str, str]] = {
 }
 
 st.set_page_config(
-    page_title="StudyRAG",
+    page_title="StudyRAG – KI-Lernassistent",
     page_icon=None,
     layout="wide",
     initial_sidebar_state="expanded",

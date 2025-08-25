@@ -82,3 +82,7 @@ class BaseAgent(ABC):
         if len(context) <= max_chars:
             return context
         return context[:max_chars] + "\n... [truncated]"
+
+    def _build_prompt_header(self, query: str) -> str:
+        """Return a standardised prompt header with the user query."""
+        return f"Frage des Studierenden: {query}\n\nRelevante Quellen:\n"

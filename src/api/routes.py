@@ -51,6 +51,7 @@ class HealthResponse(BaseModel):
     chromadb_available: bool
     gpu_available: bool
     collections_count: int
+    uptime_seconds: float
 
 
 # -- helpers ------------------------------------------------------------------

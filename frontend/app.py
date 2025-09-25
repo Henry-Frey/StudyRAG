@@ -24,6 +24,10 @@ AGENT_OPTIONS: Dict[str, Dict[str, str]] = {
         "type": "quiz",
         "description": "Generiert Multiple-Choice-Fragen zur Prüfungsvorbereitung.",
     },
+    "Zusammenfasser": {
+        "type": "summarizer",
+        "description": "Erstellt kompakte Stichpunkte aus den Vorlesungsfolien.",
+    },
     "Vernetzer": {
         "type": "connector",
         "description": "Findet Querverbindungen zwischen Konzepten aus verschiedenen Vorlesungen.",

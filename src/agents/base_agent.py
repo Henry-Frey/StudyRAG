@@ -86,3 +86,10 @@ class BaseAgent(ABC):
     def _build_prompt_header(self, query: str) -> str:
         """Return a standardised prompt header with the user query."""
         return f"Frage des Studierenden: {query}\n\nRelevante Quellen:\n"
+
+    def _score_threshold_filter(self, chunks, threshold: float = 0.3):
+        """Drop chunks below a minimum relevance threshold."""
+        return [
+            c for c in chunks
+            if (c.reranker_score if c.reranker_score is not None else c.score) >= threshold
+        ]

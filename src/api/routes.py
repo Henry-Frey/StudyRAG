@@ -316,4 +316,4 @@ async def health_check(request: Request) -> HealthResponse:
 @router.get("/version")
 async def get_version():
     """Return API version info."""
-    return {"version": "0.1.0", "name": "StudyRAG"}
+    return {"version": "0.2.0", "name": "StudyRAG"}

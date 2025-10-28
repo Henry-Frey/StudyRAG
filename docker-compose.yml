@@ -45,3 +45,7 @@ services:
   #   image: redis:7-alpine
   #   ports:
   #     - "6379:6379"
+  # Uncomment to enable Redis-backed caching:
+  # redis:
+  #   image: redis:7-alpine
+  #   restart: unless-stopped

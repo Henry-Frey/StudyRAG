@@ -38,6 +38,7 @@ st.set_page_config(
     page_title="StudyRAG – KI-Lernassistent",
     page_icon=None,
     layout="wide",
+    menu_items={},
     initial_sidebar_state="expanded",
 )
 

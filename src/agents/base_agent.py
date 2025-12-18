@@ -93,3 +93,8 @@ class BaseAgent(ABC):
             c for c in chunks
             if (c.reranker_score if c.reranker_score is not None else c.score) >= threshold
         ]
+
+    def _sanitize_query(self, query: str) -> str:
+        """Strip leading/trailing whitespace and collapse internal whitespace."""
+        import re
+        return re.sub(r"\s+", " ", query).strip()

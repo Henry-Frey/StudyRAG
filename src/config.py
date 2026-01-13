@@ -18,3 +18,8 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def get_settings() -> Settings:
+    """Return a cached Settings instance (importable singleton)."""
+    return settings

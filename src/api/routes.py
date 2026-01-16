@@ -317,3 +317,12 @@ async def health_check(request: Request) -> HealthResponse:
 async def get_version():
     """Return API version info."""
     return {"version": "0.3.0", "name": "StudyRAG"}
+
+@router.get("/agents")
+async def list_agents():
+    """Return registered agent types and their descriptions."""
+    from src.agents import AGENT_REGISTRY
+    return [
+        {"type": key, "name": cls().name, "description": cls().description}
+        for key, cls in AGENT_REGISTRY.items()
+    ]

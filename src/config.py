@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     score_threshold: float = 0.3
     cache_ttl_seconds: int = 300
     log_level: str = "INFO"
+    max_upload_size_mb: int = 50
 
     class Config:
         env_prefix = "STUDYRAG_"

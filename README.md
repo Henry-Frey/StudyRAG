@@ -273,3 +273,16 @@ pytest tests/ -v --cov=src --cov-report=term-missing
 MIT License – siehe [LICENSE](LICENSE)
 
 Copyright (c) 2024 StudyRAG Contributors
+
+## CLI Usage
+
+Run queries against a running backend:
+
+    python -m src.cli chat "Was ist ein Transformer?" --agent explainer
+
+Run `python -m src.cli --help` for all options.
+
+## Configuration
+
+Copy `.env.example` to `.env` and adjust values as needed.
+All settings can be overridden via environment variables prefixed with `STUDYRAG_`.

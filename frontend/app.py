@@ -1,6 +1,7 @@
 """StudyRAG Streamlit frontend."""
 from __future__ import annotations
 
+import io
 import json
 import os
 from typing import Any, Dict, List, Optional
@@ -34,6 +35,21 @@ AGENT_OPTIONS: Dict[str, Dict[str, str]] = {
     },
 }
 
+SPEED_OPTIONS: Dict[str, float] = {
+    "0.75x (langsam)": 0.75,
+    "1x (normal)": 1.0,
+    "1.25x": 1.25,
+    "1.5x (schnell)": 1.5,
+    "2x (sehr schnell)": 2.0,
+}
+
+TTS_LANGUAGES: Dict[str, str] = {
+    "Deutsch": "de",
+    "Englisch": "en",
+    "Französisch": "fr",
+    "Spanisch": "es",
+}
+
 st.set_page_config(
     page_title="StudyRAG – KI-Lernassistent",
     page_icon=None,
@@ -52,7 +68,11 @@ if "quiz_answers" not in st.session_state:
     st.session_state.quiz_answers: Dict[int, int] = {}
 if "quiz_submitted" not in st.session_state:
     st.session_state.quiz_submitted: bool = False
+if "tts_audio_versions" not in st.session_state:
+    st.session_state.tts_audio_versions: Dict[str, bytes] = {}
 
+
+# -- backend helpers ----------------------------------------------------------
 
 def _get_health() -> Optional[Dict[str, Any]]:
     try:
@@ -107,6 +127,34 @@ def _chat(query: str, agent_type: str, collection_name: Optional[str]) -> Option
     except Exception as exc:
         return {"error": str(exc)}
 
+
+# -- TTS helpers --------------------------------------------------------------
+
+def _text_to_speech(text: str, lang: str = "de") -> bytes:
+    """Convert text to MP3 bytes using gTTS."""
+    from gtts import gTTS  # imported lazily so the app works without it installed
+    tts = gTTS(text=text, lang=lang, slow=False)
+    buf = io.BytesIO()
+    tts.write_to_fp(buf)
+    buf.seek(0)
+    return buf.read()
+
+
+def _adjust_speed(audio_bytes: bytes, speed: float) -> bytes:
+    """Return MP3 bytes at the requested playback speed via frame-rate manipulation."""
+    from pydub import AudioSegment  # imported lazily
+    audio = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
+    adjusted = audio._spawn(
+        audio.raw_data,
+        overrides={"frame_rate": int(audio.frame_rate * speed)},
+    ).set_frame_rate(audio.frame_rate)
+    out = io.BytesIO()
+    adjusted.export(out, format="mp3")
+    out.seek(0)
+    return out.read()
+
+
+# -- render helpers -----------------------------------------------------------
 
 def _render_sources(sources: List[Dict[str, Any]]) -> None:
     if not sources:
@@ -269,94 +317,186 @@ with st.sidebar:
         st.write(f"Dokumente gesamt: {total_docs}")
 
 
-# -- main chat area -----------------------------------------------------------
+# -- main tabs ----------------------------------------------------------------
 
-col_title, col_clear = st.columns([5, 1])
-with col_title:
-    active_agent = AGENT_OPTIONS.get(st.session_state.selected_agent, {})
-    st.title(st.session_state.selected_agent)
-    st.caption(active_agent.get("description", ""))
+tab_chat, tab_reader = st.tabs(["Chat", "Vorlesen"])
 
-with col_clear:
-    st.write("")
-    if st.button("Chat leeren", key="clear_chat"):
-        st.session_state.chat_history = []
-        st.session_state.quiz_answers = {}
-        st.session_state.quiz_submitted = False
-        st.rerun()
 
-st.divider()
+# ── Chat tab ─────────────────────────────────────────────────────────────────
 
-for msg_index, msg in enumerate(st.session_state.chat_history):
-    role = msg.get("role", "user")
+with tab_chat:
+    col_title, col_clear = st.columns([5, 1])
+    with col_title:
+        active_agent = AGENT_OPTIONS.get(st.session_state.selected_agent, {})
+        st.title(st.session_state.selected_agent)
+        st.caption(active_agent.get("description", ""))
 
-    with st.chat_message(role):
-        if role == "user":
-            st.write(msg["content"])
-        else:
-            agent_name = msg.get("agent_name", "Agent")
-            agent_type = msg.get("agent_type", "")
-            st.caption(f"Agent: **{agent_name}** ({agent_type})")
+    with col_clear:
+        st.write("")
+        if st.button("Chat leeren", key="clear_chat"):
+            st.session_state.chat_history = []
+            st.session_state.quiz_answers = {}
+            st.session_state.quiz_submitted = False
+            st.rerun()
 
-            if msg.get("quiz_data"):
-                _render_quiz(msg["quiz_data"], msg_index)
+    st.divider()
+
+    for msg_index, msg in enumerate(st.session_state.chat_history):
+        role = msg.get("role", "user")
+
+        with st.chat_message(role):
+            if role == "user":
+                st.write(msg["content"])
             else:
-                st.markdown(msg["content"])
+                agent_name = msg.get("agent_name", "Agent")
+                agent_type = msg.get("agent_type", "")
+                st.caption(f"Agent: **{agent_name}** ({agent_type})")
 
-            _render_sources(msg.get("sources", []))
+                if msg.get("quiz_data"):
+                    _render_quiz(msg["quiz_data"], msg_index)
+                else:
+                    st.markdown(msg["content"])
 
-            if msg.get("processing_time_ms"):
-                st.caption(f"{msg['processing_time_ms']:.0f} ms")
+                _render_sources(msg.get("sources", []))
 
-if prompt := st.chat_input("Stelle eine Frage zu deinen Vorlesungsmaterialien…"):
-    with st.chat_message("user"):
-        st.write(prompt)
+                if msg.get("processing_time_ms"):
+                    st.caption(f"{msg['processing_time_ms']:.0f} ms")
 
-    st.session_state.chat_history.append({"role": "user", "content": prompt})
+    if prompt := st.chat_input("Stelle eine Frage zu deinen Vorlesungsmaterialien…"):
+        with st.chat_message("user"):
+            st.write(prompt)
 
-    with st.chat_message("assistant"):
-        agent_info = AGENT_OPTIONS.get(st.session_state.selected_agent, {})
-        agent_type = agent_info.get("type", "explainer")
+        st.session_state.chat_history.append({"role": "user", "content": prompt})
 
-        with st.spinner("Antwort wird generiert…"):
-            response = _chat(
-                query=prompt,
-                agent_type=agent_type,
-                collection_name=st.session_state.selected_collection,
-            )
+        with st.chat_message("assistant"):
+            agent_info = AGENT_OPTIONS.get(st.session_state.selected_agent, {})
+            agent_type = agent_info.get("type", "explainer")
 
-        if response and "error" not in response:
-            agent_name = response.get("agent_name", "Agent")
-            resp_agent_type = response.get("agent_type", "")
-            st.caption(f"Agent: **{agent_name}** ({resp_agent_type})")
+            with st.spinner("Antwort wird generiert…"):
+                response = _chat(
+                    query=prompt,
+                    agent_type=agent_type,
+                    collection_name=st.session_state.selected_collection,
+                )
 
-            quiz_data = response.get("quiz_data")
-            if quiz_data:
-                _render_quiz(quiz_data, len(st.session_state.chat_history))
+            if response and "error" not in response:
+                agent_name = response.get("agent_name", "Agent")
+                resp_agent_type = response.get("agent_type", "")
+                st.caption(f"Agent: **{agent_name}** ({resp_agent_type})")
+
+                quiz_data = response.get("quiz_data")
+                if quiz_data:
+                    _render_quiz(quiz_data, len(st.session_state.chat_history))
+                else:
+                    st.markdown(response.get("answer", ""))
+
+                _render_sources(response.get("sources", []))
+                processing_time = response.get("processing_time_ms", 0)
+                st.caption(f"{processing_time:.0f} ms")
+
+                st.session_state.chat_history.append(
+                    {
+                        "role": "assistant",
+                        "content": response.get("answer", ""),
+                        "agent_name": agent_name,
+                        "agent_type": resp_agent_type,
+                        "sources": response.get("sources", []),
+                        "quiz_data": quiz_data,
+                        "processing_time_ms": processing_time,
+                    }
+                )
             else:
-                st.markdown(response.get("answer", ""))
+                error_msg = response.get("error", "Unbekannter Fehler") if response else "Keine Antwort"
+                st.error(f"Fehler: {error_msg}")
 
-            _render_sources(response.get("sources", []))
-            processing_time = response.get("processing_time_ms", 0)
-            st.caption(f"{processing_time:.0f} ms")
+                if "Backend nicht erreichbar" in error_msg:
+                    st.info(
+                        "Stellen Sie sicher, dass das Backend läuft:\n"
+                        "```\nuvicorn src.main:app --host 0.0.0.0 --port 8000\n```"
+                    )
 
-            st.session_state.chat_history.append(
-                {
-                    "role": "assistant",
-                    "content": response.get("answer", ""),
-                    "agent_name": agent_name,
-                    "agent_type": resp_agent_type,
-                    "sources": response.get("sources", []),
-                    "quiz_data": quiz_data,
-                    "processing_time_ms": processing_time,
-                }
-            )
-        else:
-            error_msg = response.get("error", "Unbekannter Fehler") if response else "Keine Antwort"
-            st.error(f"Fehler: {error_msg}")
 
-            if "Backend nicht erreichbar" in error_msg:
-                st.info(
-                    "Stellen Sie sicher, dass das Backend läuft:\n"
-                    "```\nuvicorn src.main:app --host 0.0.0.0 --port 8000\n```"
+# ── Vorlesen tab ─────────────────────────────────────────────────────────────
+
+with tab_reader:
+    st.title("Dokument vorlesen lassen")
+    st.caption(
+        "Füge beliebigen Text ein – oder nutze die letzte Chat-Antwort – "
+        "und lade die Audio-Datei in verschiedenen Geschwindigkeiten herunter."
+    )
+    st.divider()
+
+    # Auto-fill from the most recent assistant message
+    last_response = ""
+    for msg in reversed(st.session_state.chat_history):
+        if msg.get("role") == "assistant" and msg.get("content"):
+            last_response = msg["content"]
+            break
+
+    col_text, col_settings = st.columns([3, 1])
+
+    with col_settings:
+        st.subheader("Einstellungen")
+        lang_label = st.selectbox("Sprache", options=list(TTS_LANGUAGES.keys()), index=0)
+        lang_code = TTS_LANGUAGES[lang_label]
+
+        if last_response:
+            if st.button("Letzte Antwort übernehmen"):
+                st.session_state["tts_input_text"] = last_response
+                st.rerun()
+
+    with col_text:
+        input_text: str = st.text_area(
+            "Text zum Vorlesen",
+            value=st.session_state.get("tts_input_text", last_response),
+            height=280,
+            placeholder="Füge hier den Text ein, der vorgelesen werden soll…",
+            key="tts_text_area",
+        )
+
+    generate_disabled = not input_text.strip()
+    if st.button("Audio generieren", type="primary", disabled=generate_disabled):
+        with st.spinner("Generiere Audio für alle Geschwindigkeiten… (kann einige Sekunden dauern)"):
+            try:
+                base_audio = _text_to_speech(input_text.strip(), lang=lang_code)
+                versions: Dict[str, bytes] = {}
+                for label, speed in SPEED_OPTIONS.items():
+                    versions[label] = (
+                        base_audio if speed == 1.0 else _adjust_speed(base_audio, speed)
+                    )
+                st.session_state["tts_audio_versions"] = versions
+                st.session_state["tts_input_text"] = input_text.strip()
+            except ImportError as exc:
+                st.error(
+                    f"Fehlende Abhängigkeit: {exc}\n\n"
+                    "Bitte installieren: `pip install gTTS pydub`\n"
+                    "Für Geschwindigkeitsanpassung wird außerdem **ffmpeg** benötigt."
+                )
+            except Exception as exc:
+                st.error(f"Fehler bei der Audiogenerierung: {exc}")
+
+    # -- playback & download --------------------------------------------------
+
+    if st.session_state.get("tts_audio_versions"):
+        st.divider()
+        st.subheader("Vorschau")
+        # Play the 1x version in the browser
+        normal_audio = st.session_state["tts_audio_versions"].get("1x (normal)", b"")
+        if normal_audio:
+            st.audio(normal_audio, format="audio/mp3")
+
+        st.subheader("Download nach Geschwindigkeit")
+        st.caption("Jede Datei ist bereits mit der gewählten Geschwindigkeit gerendert.")
+
+        cols = st.columns(len(SPEED_OPTIONS))
+        for col, (label, speed) in zip(cols, SPEED_OPTIONS.items()):
+            audio_data = st.session_state["tts_audio_versions"].get(label, b"")
+            filename = f"studyrag_{speed}x.mp3".replace(".", "_", 1)
+            with col:
+                st.download_button(
+                    label=label,
+                    data=audio_data,
+                    file_name=filename,
+                    mime="audio/mpeg",
+                    use_container_width=True,
                 )

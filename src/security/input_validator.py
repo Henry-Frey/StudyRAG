@@ -1,4 +1,3 @@
-"""Input validation and prompt-injection detection."""
 from __future__ import annotations
 
 import logging
@@ -10,41 +9,28 @@ from src.config import get_settings
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Custom exceptions
-# ---------------------------------------------------------------------------
-
-
 class InvalidInputError(ValueError):
-    """Raised for any malformed or unacceptable input."""
+    pass
 
 
 class InputTooLongError(InvalidInputError):
-    """Raised when the input exceeds the configured maximum length."""
+    pass
 
 
 class PromptInjectionError(InvalidInputError):
-    """Raised when a prompt-injection pattern is detected."""
-
-
-# ---------------------------------------------------------------------------
-# Validator
-# ---------------------------------------------------------------------------
+    pass
 
 
 class InputValidator:
-    """Validates and sanitises user-supplied text.
+    """Validates user queries before they reach the LLM.
 
-    Performs three checks in sequence:
-
-    1. Length check – rejects texts longer than ``max_input_length``.
-    2. Injection check – rejects texts that match any known injection pattern.
-    3. Sanitisation – strips control characters and normalises whitespace.
-
-    Class attribute ``INJECTION_PATTERNS`` lists lower-cased substrings
-    that are blocked outright.
+    Runs three passes: length check, injection pattern check, then sanitisation.
+    Keeping these separate makes it easy to add new checks later without
+    touching the others.
     """
 
+    # Patterns that suggest someone is trying to override the system prompt.
+    # Lower-cased for matching — keep this list conservative to avoid false positives.
     INJECTION_PATTERNS: List[str] = [
         "ignore previous instructions",
         "ignore all previous",
@@ -72,24 +58,7 @@ class InputValidator:
         settings = get_settings()
         self._max_length = max_input_length if max_input_length is not None else settings.max_input_length
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def validate(self, text: str) -> str:
-        """Validate and sanitise *text*.
-
-        Args:
-            text: Raw user input string.
-
-        Returns:
-            Sanitised version of *text*.
-
-        Raises:
-            InputTooLongError: If *text* exceeds ``max_input_length``.
-            PromptInjectionError: If a known injection pattern is detected.
-            InvalidInputError: For other validation failures.
-        """
         if not isinstance(text, str):
             raise InvalidInputError("Input must be a string.")
 
@@ -97,12 +66,7 @@ class InputValidator:
         self._check_injection(text)
         return self._sanitize(text)
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
     def _check_length(self, text: str) -> None:
-        """Raise :class:`InputTooLongError` if *text* is too long."""
         if len(text) > self._max_length:
             logger.warning(
                 "Input rejected: too long (%d chars, max %d)",
@@ -114,7 +78,6 @@ class InputValidator:
             )
 
     def _check_injection(self, text: str) -> None:
-        """Raise :class:`PromptInjectionError` if any injection pattern matches."""
         lowered = text.lower()
         for pattern in self.INJECTION_PATTERNS:
             if pattern in lowered:
@@ -129,20 +92,8 @@ class InputValidator:
 
     @staticmethod
     def _sanitize(text: str) -> str:
-        """Strip dangerous characters and normalise whitespace.
-
-        - Removes ASCII control characters (0x00-0x08, 0x0B, 0x0C, 0x0E-0x1F, 0x7F).
-        - Preserves newline (0x0A) and tab (0x09) as harmless whitespace.
-        - Normalises runs of whitespace (excluding newlines) to single spaces.
-
-        Args:
-            text: Validated input text.
-
-        Returns:
-            Sanitised string.
-        """
-        # Remove control chars except \t and \n
+        # strip control characters except \t and \n — those are harmless
         sanitized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
-        # Collapse multiple spaces/tabs into one space (but keep newlines)
+        # collapse multiple spaces/tabs to one (but preserve newlines)
         sanitized = re.sub(r"[^\S\n]+", " ", sanitized)
         return sanitized.strip()

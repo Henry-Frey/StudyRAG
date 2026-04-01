@@ -1,4 +1,4 @@
-"""FastAPI application entry point for StudyRAG."""
+"""StudyRAG FastAPI entry point."""
 from __future__ import annotations
 
 import logging
@@ -13,13 +13,8 @@ from fastapi.responses import RedirectResponse
 from src.config import get_settings
 from src.api.routes import router
 
-# ---------------------------------------------------------------------------
-# Logging setup (must happen before any logger calls)
-# ---------------------------------------------------------------------------
-
 
 def _configure_logging(log_level: str) -> None:
-    """Configure root logger with a human-readable format."""
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
     logging.basicConfig(
         level=numeric_level,
@@ -33,21 +28,15 @@ _configure_logging(get_settings().log_level)
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Lifespan: initialise heavyweight components once on startup
-# ---------------------------------------------------------------------------
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Initialise LLM, embedder, vector store and agents on startup; clean up on shutdown."""
+    """Load all heavyweight components once on startup."""
     settings = get_settings()
     logger.info("StudyRAG starting up…")
 
-    # Store settings in app state for routes
     app.state.settings = settings
 
-    # --- PDF parser & chunker (lightweight) ---
+    # lightweight — always init first
     from src.ingestion.pdf_parser import PDFParser
     from src.ingestion.chunker import TextChunker
 
@@ -57,43 +46,43 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         chunk_overlap=settings.chunk_overlap,
     )
 
-    # --- Embedder ---
     try:
         from src.ingestion.embedder import DocumentEmbedder
-
         app.state.embedder = DocumentEmbedder(model_name=settings.embedding_model)
         logger.info("Embedder loaded: %s", settings.embedding_model)
     except Exception as exc:
-        logger.error("Failed to load embedder: %s", exc)
+        logger.error("Failed to load embedder: %s", exc, exc_info=True)
         app.state.embedder = None
 
-    # --- Vector store ---
+    # init vector store even if embedder failed — queries will raise at that point
     try:
         from src.retrieval.vector_store import ChromaVectorStore
-
         app.state.vector_store = ChromaVectorStore(
             persist_directory=settings.chroma_persist_dir,
             embedder=app.state.embedder,
         )
         logger.info("Vector store initialised at: %s", settings.chroma_persist_dir)
     except Exception as exc:
-        logger.error("Failed to initialise vector store: %s", exc)
+        logger.error("Failed to initialise vector store: %s", exc, exc_info=True)
         app.state.vector_store = None
 
-    # --- Reranker ---
     try:
         from src.retrieval.reranker import CrossEncoderReranker
-
         app.state.reranker = CrossEncoderReranker(model_name=settings.reranker_model)
         logger.info("Reranker loaded: %s", settings.reranker_model)
     except Exception as exc:
-        logger.warning("Reranker not loaded (will skip reranking): %s", exc)
+        logger.warning("Reranker not loaded (will skip reranking): %s", exc, exc_info=True)
         app.state.reranker = None
 
-    # --- LLM ---
+    logger.info(
+        "Component status — embedder: %s | vector_store: %s | reranker: %s",
+        "OK" if app.state.embedder else "FAILED",
+        "OK" if app.state.vector_store else "FAILED",
+        "OK" if app.state.reranker else "FAILED",
+    )
+
     try:
         from src.llm.local_llm import LocalLLM
-
         app.state.llm = LocalLLM(
             model_path=settings.llm_model_path,
             n_gpu_layers=settings.llm_n_gpu_layers,
@@ -109,7 +98,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.error("Failed to initialise LLM: %s", exc)
         app.state.llm = None
 
-    # --- Agents ---
     llm = app.state.llm
     agents: dict = {}
 
@@ -125,26 +113,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         }
         logger.info("Agents registered: %s", list(agents.keys()))
     else:
-        logger.warning("LLM not available – agents will not be registered")
+        logger.warning("LLM not available — agents will not be registered")
 
     app.state.agents = agents
-
     logger.info("StudyRAG startup complete")
 
-    # ----- Application runs here -----
     yield
 
-    # Shutdown
     logger.info("StudyRAG shutting down…")
 
 
-# ---------------------------------------------------------------------------
-# Application factory
-# ---------------------------------------------------------------------------
-
-
 def create_app() -> FastAPI:
-    """Create and configure the FastAPI application."""
     settings = get_settings()
 
     app = FastAPI(
@@ -160,7 +139,7 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
     )
 
-    # CORS – allow all origins for development
+    # allow all origins for local dev — tighten for production
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -169,18 +148,16 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Routes
     app.include_router(router)
 
     @app.get("/", include_in_schema=False)
     async def root() -> RedirectResponse:
-        """Redirect root to the interactive API docs."""
         return RedirectResponse(url="/docs")
 
     return app
 
 
-# Module-level app instance (used by uvicorn and tests)
+# used by uvicorn and the test suite
 app = create_app()
 
 

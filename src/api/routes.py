@@ -1,4 +1,3 @@
-"""FastAPI route definitions for the StudyRAG API."""
 from __future__ import annotations
 
 import logging
@@ -16,22 +15,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["StudyRAG"])
 
-# ---------------------------------------------------------------------------
-# Request / Response models
-# ---------------------------------------------------------------------------
 
+# -- request / response models ------------------------------------------------
 
 class ChatRequest(BaseModel):
-    """Request body for the /api/chat endpoint."""
-
-    query: str = Field(..., min_length=1, max_length=2000, description="User query")
-    agent_type: str = Field(default="explainer", description="Agent type: explainer, quiz, connector")
-    collection_name: Optional[str] = Field(default=None, description="Target collection (None = all)")
+    query: str = Field(..., min_length=1, max_length=2000)
+    agent_type: str = Field(default="explainer")
+    collection_name: Optional[str] = Field(default=None)
 
 
 class ChatResponse(BaseModel):
-    """Response from the /api/chat endpoint."""
-
     answer: str
     sources: List[dict]
     agent_name: str
@@ -41,8 +34,6 @@ class ChatResponse(BaseModel):
 
 
 class UploadResponse(BaseModel):
-    """Response from the /api/upload endpoint."""
-
     message: str
     collection_name: str
     chunks_added: int
@@ -50,15 +41,11 @@ class UploadResponse(BaseModel):
 
 
 class CollectionInfo(BaseModel):
-    """Metadata for a single ChromaDB collection."""
-
     name: str
     document_count: int
 
 
 class HealthResponse(BaseModel):
-    """Response from the /api/health endpoint."""
-
     status: str
     llm_loaded: bool
     chromadb_available: bool
@@ -66,19 +53,43 @@ class HealthResponse(BaseModel):
     collections_count: int
 
 
-# ---------------------------------------------------------------------------
-# Helpers to access app state (set during lifespan in main.py)
-# ---------------------------------------------------------------------------
-
+# -- helpers ------------------------------------------------------------------
 
 def _get_app_state(request: Request) -> dict:
-    """Extract the shared application state from the request's app."""
-    return request.app.state.__dict__
+    # Starlette stores state values in _state, not __dict__
+    return request.app.state._state
 
 
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
+# -- routes -------------------------------------------------------------------
+
+@router.get("/debug", summary="Internal state dump (dev only)")
+async def debug_state(request: Request) -> dict:
+    state = _get_app_state(request)
+    vs = state.get("vector_store")
+    embedder = state.get("embedder")
+    llm = state.get("llm")
+    result = {
+        "state_keys": list(state.keys()),
+        "embedder": str(type(embedder)),
+        "llm_loaded": llm.is_loaded() if llm else False,
+        "vector_store": None,
+    }
+    if vs:
+        try:
+            cols = vs.list_collections()
+            result["vector_store"] = {
+                "type": str(type(vs)),
+                "persist_dir": vs._persist_dir,
+                "collections": cols,
+                "collections_count": len(cols),
+            }
+            for col_name in cols:
+                result["vector_store"][col_name] = vs.get_collection_info(col_name)
+        except Exception as e:
+            result["vector_store"] = {"error": str(e)}
+    else:
+        result["vector_store"] = "None — not in state"
+    return result
 
 
 @router.post(
@@ -89,25 +100,15 @@ def _get_app_state(request: Request) -> dict:
 )
 async def upload_pdf(
     request: Request,
-    file: UploadFile = File(..., description="PDF file to ingest"),
+    file: UploadFile = File(...),
     collection_name: Optional[str] = Form(default=None),
 ) -> UploadResponse:
-    """Ingest a PDF into the vector store.
-
-    Parses the PDF, splits it into chunks, generates embeddings, and stores
-    everything in ChromaDB under *collection_name* (defaults to the filename
-    stem if not provided).
-    """
     state = _get_app_state(request)
 
     if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only PDF files are accepted.",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only PDF files are accepted.")
 
     col_name = collection_name or file.filename.replace(".pdf", "").replace(" ", "_")
-
     logger.info("Upload request: file='%s', collection='%s'", file.filename, col_name)
 
     try:
@@ -137,9 +138,7 @@ async def upload_pdf(
 
         logger.info(
             "Upload complete: %d pages, %d chunks, collection='%s'",
-            len(pages),
-            added,
-            col_name,
+            len(pages), added, col_name,
         )
 
         return UploadResponse(
@@ -165,15 +164,10 @@ async def upload_pdf(
     summary="Chat with a StudyRAG agent",
     dependencies=[Depends(rate_limit_dependency)],
 )
-async def chat(
-    request: Request,
-    body: ChatRequest,
-) -> ChatResponse:
-    """Send a query to the specified agent and receive an answer with sources."""
+async def chat(request: Request, body: ChatRequest) -> ChatResponse:
     state = _get_app_state(request)
     t0 = time.perf_counter()
 
-    # Input validation
     validator = InputValidator()
     try:
         validated_query = validator.validate(body.query)
@@ -202,16 +196,14 @@ async def chat(
 
     logger.info(
         "Chat request: agent='%s', collection='%s', query='%.80s'",
-        body.agent_type,
-        body.collection_name,
-        validated_query,
+        body.agent_type, body.collection_name, validated_query,
     )
 
     try:
         top_k = settings.top_k_retrieval if settings else 10
         top_k_rerank = settings.top_k_rerank if settings else 5
 
-        # Connector agent requests more chunks for broader coverage
+        # connector benefits from a wider retrieval window
         if body.agent_type == "connector":
             top_k = top_k * 2
 
@@ -221,11 +213,12 @@ async def chat(
             chunks = vector_store.query_all_collections(validated_query, top_k=top_k)
 
         if not chunks:
-            # Return a helpful response even when no documents are indexed
             elapsed_ms = (time.perf_counter() - t0) * 1000
             return ChatResponse(
-                answer="Es wurden keine relevanten Dokumente gefunden. "
-                       "Bitte laden Sie zuerst Vorlesungsmaterialien hoch.",
+                answer=(
+                    "Es wurden keine relevanten Dokumente gefunden. "
+                    "Bitte laden Sie zuerst Vorlesungsmaterialien hoch."
+                ),
                 sources=[],
                 agent_name=agent.name,
                 agent_type=agent.agent_type,
@@ -238,11 +231,7 @@ async def chat(
         response = agent.run(validated_query, chunks)
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
-        logger.info(
-            "Chat complete: agent='%s', time=%.0f ms",
-            body.agent_type,
-            elapsed_ms,
-        )
+        logger.info("Chat complete: agent='%s', time=%.0f ms", body.agent_type, elapsed_ms)
 
         return ChatResponse(
             answer=response.answer,
@@ -263,52 +252,30 @@ async def chat(
         ) from exc
 
 
-@router.get(
-    "/collections",
-    response_model=List[CollectionInfo],
-    summary="List all available document collections",
-)
+@router.get("/collections", response_model=List[CollectionInfo])
 async def list_collections(request: Request) -> List[CollectionInfo]:
-    """Return all ChromaDB collections with their document counts."""
     state = _get_app_state(request)
     vector_store = state.get("vector_store")
 
     if not vector_store:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Vector store not initialised.",
-        )
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Vector store not initialised.")
 
     collection_names = vector_store.list_collections()
-    result: List[CollectionInfo] = []
-
-    for name in collection_names:
-        info = vector_store.get_collection_info(name)
-        result.append(
-            CollectionInfo(name=name, document_count=info.get("document_count", 0))
-        )
-
-    return result
+    return [
+        CollectionInfo(name=name, document_count=vector_store.get_collection_info(name).get("document_count", 0))
+        for name in collection_names
+    ]
 
 
-@router.delete(
-    "/collections/{name}",
-    summary="Delete a document collection",
-    status_code=status.HTTP_200_OK,
-)
+@router.delete("/collections/{name}", status_code=status.HTTP_200_OK)
 async def delete_collection(name: str, request: Request) -> dict:
-    """Delete the ChromaDB collection identified by *name*."""
     state = _get_app_state(request)
     vector_store = state.get("vector_store")
 
     if not vector_store:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Vector store not initialised.",
-        )
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Vector store not initialised.")
 
-    success = vector_store.delete_collection(name)
-    if not success:
+    if not vector_store.delete_collection(name):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Collection '{name}' not found or could not be deleted.",
@@ -318,13 +285,8 @@ async def delete_collection(name: str, request: Request) -> dict:
     return {"message": f"Collection '{name}' successfully deleted."}
 
 
-@router.get(
-    "/health",
-    response_model=HealthResponse,
-    summary="API health check",
-)
+@router.get("/health", response_model=HealthResponse)
 async def health_check(request: Request) -> HealthResponse:
-    """Return the current health status of the API and its components."""
     state = _get_app_state(request)
 
     llm = state.get("llm")
@@ -340,14 +302,10 @@ async def health_check(request: Request) -> HealthResponse:
         except Exception:
             chromadb_available = False
 
-    gpu_available = torch.cuda.is_available()
-
-    overall_status = "healthy" if (llm_loaded and chromadb_available) else "degraded"
-
     return HealthResponse(
-        status=overall_status,
+        status="healthy" if (llm_loaded and chromadb_available) else "degraded",
         llm_loaded=llm_loaded,
         chromadb_available=chromadb_available,
-        gpu_available=gpu_available,
+        gpu_available=torch.cuda.is_available(),
         collections_count=collections_count,
     )

@@ -1,4 +1,3 @@
-"""Document embedding utilities using SentenceTransformers."""
 from __future__ import annotations
 
 import logging
@@ -14,8 +13,6 @@ _DEFAULT_BATCH_SIZE = 32
 
 
 class EmbeddedChunk(BaseModel):
-    """A :class:`TextChunk` extended with its dense embedding vector."""
-
     text: str
     source_file: str
     page_number: int
@@ -25,7 +22,6 @@ class EmbeddedChunk(BaseModel):
 
     @classmethod
     def from_chunk(cls, chunk: TextChunk, embedding: List[float]) -> "EmbeddedChunk":
-        """Create an :class:`EmbeddedChunk` from a :class:`TextChunk` and its embedding."""
         return cls(
             text=chunk.text,
             source_file=chunk.source_file,
@@ -37,12 +33,6 @@ class EmbeddedChunk(BaseModel):
 
 
 class DocumentEmbedder:
-    """Generates dense vector embeddings for text chunks and queries.
-
-    Args:
-        model_name: HuggingFace model identifier (e.g.
-            ``"sentence-transformers/all-MiniLM-L6-v2"``).
-    """
 
     def __init__(self, model_name: str) -> None:
         from sentence_transformers import SentenceTransformer
@@ -50,26 +40,13 @@ class DocumentEmbedder:
         logger.info("Loading embedding model: %s", model_name)
         self._model = SentenceTransformer(model_name)
         self._model_name = model_name
-        logger.info("Embedding model loaded successfully: %s", model_name)
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+        logger.info("Embedding model loaded: %s", model_name)
 
     def embed_chunks(
         self,
         chunks: List[TextChunk],
         batch_size: int = _DEFAULT_BATCH_SIZE,
     ) -> List[EmbeddedChunk]:
-        """Embed a list of text chunks in batches.
-
-        Args:
-            chunks: Text chunks to embed.
-            batch_size: Number of texts sent to the model at once.
-
-        Returns:
-            List of :class:`EmbeddedChunk` objects in the same order as *chunks*.
-        """
         if not chunks:
             return []
 
@@ -83,27 +60,18 @@ class DocumentEmbedder:
             convert_to_numpy=True,
         )
 
-        embedded: List[EmbeddedChunk] = []
-        for chunk, embedding in zip(chunks, embeddings):
-            embedded.append(EmbeddedChunk.from_chunk(chunk, embedding.tolist()))
+        embedded = [
+            EmbeddedChunk.from_chunk(chunk, emb.tolist())
+            for chunk, emb in zip(chunks, embeddings)
+        ]
 
-        logger.info("Embedding complete: %d chunks embedded", len(embedded))
+        logger.info("Embedding complete: %d chunks", len(embedded))
         return embedded
 
     def embed_query(self, query: str) -> List[float]:
-        """Embed a single query string.
-
-        Args:
-            query: The user's query text.
-
-        Returns:
-            Dense vector as a plain Python list of floats.
-        """
         logger.debug("Embedding query (length=%d)", len(query))
-        vector = self._model.encode(query, convert_to_numpy=True)
-        return vector.tolist()
+        return self._model.encode(query, convert_to_numpy=True).tolist()
 
     @property
     def model_name(self) -> str:
-        """Name of the underlying SentenceTransformer model."""
         return self._model_name

@@ -1,4 +1,4 @@
-"""StudyRAG Streamlit frontend application."""
+"""StudyRAG Streamlit frontend."""
 from __future__ import annotations
 
 import json
@@ -7,10 +7,6 @@ from typing import Any, Dict, List, Optional
 
 import requests
 import streamlit as st
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
 
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
 API_CHAT = f"{BACKEND_URL}/api/chat"
@@ -34,20 +30,12 @@ AGENT_OPTIONS: Dict[str, Dict[str, str]] = {
     },
 }
 
-# ---------------------------------------------------------------------------
-# Page configuration
-# ---------------------------------------------------------------------------
-
 st.set_page_config(
     page_title="StudyRAG",
-    page_icon="📚",
+    page_icon=None,
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-# ---------------------------------------------------------------------------
-# Session state initialisation
-# ---------------------------------------------------------------------------
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history: List[Dict[str, Any]] = []
@@ -61,25 +49,16 @@ if "quiz_submitted" not in st.session_state:
     st.session_state.quiz_submitted: bool = False
 
 
-# ---------------------------------------------------------------------------
-# Helper functions
-# ---------------------------------------------------------------------------
-
-
 def _get_health() -> Optional[Dict[str, Any]]:
-    """Fetch health status from the backend."""
     try:
         response = requests.get(API_HEALTH, timeout=5)
         response.raise_for_status()
         return response.json()
-    except requests.exceptions.ConnectionError:
-        return None
     except Exception:
         return None
 
 
 def _get_collections() -> List[Dict[str, Any]]:
-    """Fetch available collections from the backend."""
     try:
         response = requests.get(API_COLLECTIONS, timeout=5)
         response.raise_for_status()
@@ -88,12 +67,7 @@ def _get_collections() -> List[Dict[str, Any]]:
         return []
 
 
-def _upload_pdf(
-    file_bytes: bytes,
-    filename: str,
-    collection_name: str,
-) -> Optional[Dict[str, Any]]:
-    """Upload a PDF to the backend ingestion endpoint."""
+def _upload_pdf(file_bytes: bytes, filename: str, collection_name: str) -> Optional[Dict[str, Any]]:
     try:
         files = {"file": (filename, file_bytes, "application/pdf")}
         data = {"collection_name": collection_name}
@@ -108,16 +82,8 @@ def _upload_pdf(
         return {"error": str(exc)}
 
 
-def _chat(
-    query: str,
-    agent_type: str,
-    collection_name: Optional[str],
-) -> Optional[Dict[str, Any]]:
-    """Send a chat request to the backend."""
-    payload: Dict[str, Any] = {
-        "query": query,
-        "agent_type": agent_type,
-    }
+def _chat(query: str, agent_type: str, collection_name: Optional[str]) -> Optional[Dict[str, Any]]:
+    payload: Dict[str, Any] = {"query": query, "agent_type": agent_type}
     if collection_name:
         payload["collection_name"] = collection_name
 
@@ -138,7 +104,6 @@ def _chat(
 
 
 def _render_sources(sources: List[Dict[str, Any]]) -> None:
-    """Render source citations in an expandable section."""
     if not sources:
         return
 
@@ -152,11 +117,10 @@ def _render_sources(sources: List[Dict[str, Any]]) -> None:
                 st.write(f"Seite {src.get('page_number', '?')}")
             with col3:
                 score = src.get("relevance_score", 0)
-                st.write(f"Relevanz: {score:.2%}")
+                st.write(f"Relevanz: {score:.3f}")
 
 
 def _render_quiz(quiz_data: Dict[str, Any], msg_index: int) -> None:
-    """Render interactive Multiple-Choice quiz questions."""
     questions = quiz_data.get("questions", [])
     if not questions:
         return
@@ -200,17 +164,13 @@ def _render_quiz(quiz_data: Dict[str, Any], msg_index: int) -> None:
         st.divider()
 
 
-# ---------------------------------------------------------------------------
-# Sidebar
-# ---------------------------------------------------------------------------
-
+# -- sidebar ------------------------------------------------------------------
 
 with st.sidebar:
-    st.title("📚 StudyRAG")
+    st.title("StudyRAG")
     st.markdown("*KI-Lernassistent mit RAG-Pipeline*")
     st.divider()
 
-    # --- Upload section ---
     st.subheader("Dokumente hochladen")
 
     uploaded_files = st.file_uploader(
@@ -220,66 +180,68 @@ with st.sidebar:
         help="Laden Sie Vorlesungsfolien oder Skripte als PDF hoch.",
     )
 
+    # Read bytes immediately — the file object goes stale after a rerun
+    if uploaded_files:
+        pending = []
+        for f in uploaded_files:
+            f.seek(0)
+            pending.append((f.name, f.read()))
+        st.session_state["pending_uploads"] = pending
+    elif "pending_uploads" not in st.session_state:
+        st.session_state["pending_uploads"] = []
+
     collection_input = st.text_input(
         "Sammlungsname",
         placeholder="z.B. Informatik_WS24",
         help="Name für die Dokumentensammlung (optional, Dateiname wird verwendet wenn leer).",
     )
 
-    if st.button("Hochladen", type="primary", disabled=not uploaded_files):
-        if uploaded_files:
-            progress_bar = st.progress(0)
-            status_placeholder = st.empty()
+    has_pending = bool(st.session_state.get("pending_uploads"))
+    if st.button("Hochladen", type="primary") and has_pending:
+        upload_results = []
+        pending = st.session_state.get("pending_uploads", [])
+        progress_bar = st.progress(0)
 
-            for i, uploaded_file in enumerate(uploaded_files):
-                col_name = (
-                    collection_input.strip()
-                    if collection_input.strip()
-                    else uploaded_file.name.replace(".pdf", "").replace(" ", "_")
+        for i, (filename, file_bytes) in enumerate(pending):
+            col_name = (
+                collection_input.strip()
+                if collection_input.strip()
+                else filename.replace(".pdf", "").replace(" ", "_")
+            )
+            with st.spinner(f"Verarbeite '{filename}'…"):
+                result = _upload_pdf(file_bytes, filename, col_name)
+            progress_bar.progress((i + 1) / len(pending))
+            upload_results.append((filename, result))
+
+        st.session_state["last_upload_results"] = upload_results
+        st.session_state["pending_uploads"] = []
+        st.rerun()
+
+    if "last_upload_results" in st.session_state:
+        for filename, result in st.session_state["last_upload_results"]:
+            if result and "error" not in result:
+                st.success(
+                    f"'{filename}': {result.get('chunks_added', 0)} Chunks, "
+                    f"{result.get('pages_processed', 0)} Seiten"
                 )
-
-                status_placeholder.info(f"Verarbeite '{uploaded_file.name}'…")
-                file_bytes = uploaded_file.read()
-
-                result = _upload_pdf(file_bytes, uploaded_file.name, col_name)
-                progress = (i + 1) / len(uploaded_files)
-                progress_bar.progress(progress)
-
-                if result and "error" not in result:
-                    st.success(
-                        f"'{uploaded_file.name}' verarbeitet: "
-                        f"{result.get('chunks_added', 0)} Chunks, "
-                        f"{result.get('pages_processed', 0)} Seiten"
-                    )
-                else:
-                    error_msg = result.get("error", "Unbekannter Fehler") if result else "Keine Antwort"
-                    st.error(f"Fehler bei '{uploaded_file.name}': {error_msg}")
-
-            status_placeholder.empty()
-            st.rerun()
+            else:
+                error_msg = result.get("error", "Unbekannter Fehler") if result else "Keine Antwort"
+                st.error(f"Fehler '{filename}': {error_msg}")
 
     st.divider()
 
-    # --- Settings section ---
     st.subheader("Einstellungen")
 
-    # Collection selector
     collections = _get_collections()
     collection_names = ["Alle Sammlungen"] + [c["name"] for c in collections]
-    selected_col_label = st.selectbox(
-        "Sammlung auswählen",
-        options=collection_names,
-        help="Wählen Sie eine spezifische Sammlung oder alle.",
-    )
+    selected_col_label = st.selectbox("Sammlung auswählen", options=collection_names)
     st.session_state.selected_collection = (
         None if selected_col_label == "Alle Sammlungen" else selected_col_label
     )
 
-    # Agent selector
     agent_label = st.radio(
         "Agent auswählen",
         options=list(AGENT_OPTIONS.keys()),
-        format_func=lambda x: x,
         key="agent_radio",
     )
     st.session_state.selected_agent = agent_label
@@ -287,7 +249,6 @@ with st.sidebar:
 
     st.divider()
 
-    # --- Status info ---
     st.subheader("Status")
     health = _get_health()
 
@@ -295,28 +256,24 @@ with st.sidebar:
         st.error("Backend nicht erreichbar")
     else:
         status_color = "green" if health.get("status") == "healthy" else "orange"
-        st.markdown(
-            f"Status: :{status_color}[{health.get('status', 'unknown').upper()}]"
-        )
+        st.markdown(f"Status: :{status_color}[{health.get('status', 'unknown').upper()}]")
         st.write(f"LLM geladen: {'Ja' if health.get('llm_loaded') else 'Nein'}")
         st.write(f"GPU verfügbar: {'Ja' if health.get('gpu_available') else 'Nein'}")
         st.write(f"Sammlungen: {health.get('collections_count', 0)}")
         total_docs = sum(c.get("document_count", 0) for c in collections)
         st.write(f"Dokumente gesamt: {total_docs}")
 
-# ---------------------------------------------------------------------------
-# Main area: Chat interface
-# ---------------------------------------------------------------------------
 
-# Header
+# -- main chat area -----------------------------------------------------------
+
 col_title, col_clear = st.columns([5, 1])
 with col_title:
     active_agent = AGENT_OPTIONS.get(st.session_state.selected_agent, {})
-    st.title(f"💬 {st.session_state.selected_agent}")
+    st.title(st.session_state.selected_agent)
     st.caption(active_agent.get("description", ""))
 
 with col_clear:
-    st.write("")  # vertical spacer
+    st.write("")
     if st.button("Chat leeren", key="clear_chat"):
         st.session_state.chat_history = []
         st.session_state.quiz_answers = {}
@@ -325,7 +282,6 @@ with col_clear:
 
 st.divider()
 
-# Render existing chat history
 for msg_index, msg in enumerate(st.session_state.chat_history):
     role = msg.get("role", "user")
 
@@ -333,12 +289,10 @@ for msg_index, msg in enumerate(st.session_state.chat_history):
         if role == "user":
             st.write(msg["content"])
         else:
-            # Assistant message
             agent_name = msg.get("agent_name", "Agent")
             agent_type = msg.get("agent_type", "")
             st.caption(f"Agent: **{agent_name}** ({agent_type})")
 
-            # Render quiz interactively if quiz_data present
             if msg.get("quiz_data"):
                 _render_quiz(msg["quiz_data"], msg_index)
             else:
@@ -347,17 +301,14 @@ for msg_index, msg in enumerate(st.session_state.chat_history):
             _render_sources(msg.get("sources", []))
 
             if msg.get("processing_time_ms"):
-                st.caption(f"⏱ {msg['processing_time_ms']:.0f} ms")
+                st.caption(f"{msg['processing_time_ms']:.0f} ms")
 
-# Chat input
 if prompt := st.chat_input("Stelle eine Frage zu deinen Vorlesungsmaterialien…"):
-    # Show user message immediately
     with st.chat_message("user"):
         st.write(prompt)
 
     st.session_state.chat_history.append({"role": "user", "content": prompt})
 
-    # Show spinner while waiting for response
     with st.chat_message("assistant"):
         agent_info = AGENT_OPTIONS.get(st.session_state.selected_agent, {})
         agent_type = agent_info.get("type", "explainer")
@@ -382,9 +333,8 @@ if prompt := st.chat_input("Stelle eine Frage zu deinen Vorlesungsmaterialien…
 
             _render_sources(response.get("sources", []))
             processing_time = response.get("processing_time_ms", 0)
-            st.caption(f"⏱ {processing_time:.0f} ms")
+            st.caption(f"{processing_time:.0f} ms")
 
-            # Store in history
             st.session_state.chat_history.append(
                 {
                     "role": "assistant",

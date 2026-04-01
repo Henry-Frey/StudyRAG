@@ -1,4 +1,4 @@
-"""Abstract base class for all StudyRAG agents."""
+"""Shared base class and response types for all agents."""
 from __future__ import annotations
 
 import logging
@@ -13,8 +13,6 @@ logger = logging.getLogger(__name__)
 
 
 class SourceReference(BaseModel):
-    """Lightweight reference to a source used in an agent response."""
-
     file_name: str
     page_number: int
     relevance_score: float
@@ -22,71 +20,32 @@ class SourceReference(BaseModel):
 
 
 class AgentResponse(BaseModel):
-    """Structured response from any StudyRAG agent."""
-
     answer: str
     sources: List[SourceReference]
     agent_name: str
     agent_type: str
-    quiz_data: Optional[dict] = None  # populated only by QuizAgent
+    quiz_data: Optional[dict] = None  # only populated by QuizAgent
 
 
 class BaseAgent(ABC):
-    """Abstract base for all StudyRAG agents.
-
-    Sub-classes must implement :pyattr:`name`, :pyattr:`description`,
-    :pyattr:`agent_type`, and :meth:`run`.
-    """
-
-    # ------------------------------------------------------------------
-    # Abstract interface
-    # ------------------------------------------------------------------
 
     @property
     @abstractmethod
-    def name(self) -> str:
-        """Human-readable agent name (in German)."""
+    def name(self) -> str: ...
 
     @property
     @abstractmethod
-    def description(self) -> str:
-        """Short description of the agent's purpose (in German)."""
+    def description(self) -> str: ...
 
     @property
     @abstractmethod
-    def agent_type(self) -> str:
-        """Machine-readable agent type identifier."""
+    def agent_type(self) -> str: ...
 
     @abstractmethod
-    def run(self, query: str, retrieved_chunks: List[RetrievedChunk]) -> AgentResponse:
-        """Execute the agent for *query* using *retrieved_chunks* as context.
-
-        Args:
-            query: The user's question or request.
-            retrieved_chunks: Reranked context chunks from the retrieval pipeline.
-
-        Returns:
-            :class:`AgentResponse` with the agent's answer and cited sources.
-        """
-
-    # ------------------------------------------------------------------
-    # Shared helpers
-    # ------------------------------------------------------------------
+    def run(self, query: str, retrieved_chunks: List[RetrievedChunk]) -> AgentResponse: ...
 
     def _format_context(self, chunks: List[RetrievedChunk]) -> str:
-        """Format retrieved chunks into a numbered context string.
-
-        Each chunk is rendered as::
-
-            [1] Quelle: lecture_title (source_file, Seite page_number)
-            chunk text…
-
-        Args:
-            chunks: Retrieved and (optionally) reranked chunks.
-
-        Returns:
-            Multi-line context string ready for inclusion in a prompt.
-        """
+        """Format chunks into a numbered context block for prompt injection."""
         if not chunks:
             return "Keine relevanten Quellen gefunden."
 
@@ -97,21 +56,12 @@ class BaseAgent(ABC):
                 f"({chunk.source_file}, Seite {chunk.page_number})"
             )
             lines.append(chunk.text)
-            lines.append("")  # blank separator
+            lines.append("")
 
         return "\n".join(lines).strip()
 
     def _extract_sources(self, chunks: List[RetrievedChunk]) -> List[SourceReference]:
-        """Extract unique source references from a list of retrieved chunks.
-
-        Deduplicates by (source_file, page_number), keeping the highest score.
-
-        Args:
-            chunks: Retrieved chunks.
-
-        Returns:
-            Deduplicated list of :class:`SourceReference` objects.
-        """
+        """Deduplicate by (file, page), keeping the highest relevance score."""
         seen: dict[tuple[str, int], SourceReference] = {}
 
         for chunk in chunks:

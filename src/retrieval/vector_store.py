@@ -1,4 +1,3 @@
-"""ChromaDB-based vector store for document retrieval."""
 from __future__ import annotations
 
 import logging
@@ -12,8 +11,6 @@ logger = logging.getLogger(__name__)
 
 
 class RetrievedChunk(BaseModel):
-    """A chunk returned from a vector store query, enriched with similarity score."""
-
     text: str
     source_file: str
     page_number: int
@@ -25,43 +22,24 @@ class RetrievedChunk(BaseModel):
 
 
 class ChromaVectorStore:
-    """Persistent ChromaDB vector store.
+    """Thin wrapper around ChromaDB's PersistentClient.
 
-    Supports multiple named collections (one per uploaded document / lecture).
-
-    Args:
-        persist_directory: Directory where ChromaDB will persist its data.
-        embedder: :class:`DocumentEmbedder` used for query embedding.
+    Each uploaded document gets its own named collection so users can query
+    a single lecture or all of them at once.
     """
 
-    def __init__(self, persist_directory: str, embedder: DocumentEmbedder) -> None:
+    def __init__(self, persist_directory: str, embedder: Optional[DocumentEmbedder]) -> None:
         import chromadb
+        import os
 
         self._embedder = embedder
         self._persist_dir = persist_directory
 
-        # Use PersistentClient so data survives restarts
+        os.makedirs(persist_directory, exist_ok=True)
         self._client = chromadb.PersistentClient(path=persist_directory)
         logger.info("ChromaVectorStore initialised at: %s", persist_directory)
 
-    # ------------------------------------------------------------------
-    # Write
-    # ------------------------------------------------------------------
-
-    def add_documents(
-        self, chunks: List[EmbeddedChunk], collection_name: str
-    ) -> int:
-        """Add embedded chunks to a named collection.
-
-        The collection is created if it does not yet exist.
-
-        Args:
-            chunks: Embedded chunks to store.
-            collection_name: Target ChromaDB collection.
-
-        Returns:
-            Number of chunks successfully added.
-        """
+    def add_documents(self, chunks: List[EmbeddedChunk], collection_name: str) -> int:
         if not chunks:
             logger.warning("add_documents called with empty chunk list")
             return 0
@@ -91,62 +69,36 @@ class ChromaVectorStore:
             metadatas=metadatas,
         )
 
-        logger.info(
-            "Added %d chunks to collection '%s'",
-            len(chunks),
-            collection_name,
-        )
+        logger.info("Added %d chunks to collection '%s'", len(chunks), collection_name)
         return len(chunks)
 
-    # ------------------------------------------------------------------
-    # Query
-    # ------------------------------------------------------------------
-
-    def query(
-        self,
-        query_text: str,
-        collection_name: str,
-        top_k: int = 10,
-    ) -> List[RetrievedChunk]:
-        """Query a single collection.
-
-        Args:
-            query_text: Natural-language query.
-            collection_name: Collection to search in.
-            top_k: Maximum number of results to return.
-
-        Returns:
-            List of :class:`RetrievedChunk` objects sorted by relevance (best first).
-        """
+    def query(self, query_text: str, collection_name: str, top_k: int = 10) -> List[RetrievedChunk]:
         try:
             collection = self._client.get_collection(name=collection_name)
         except Exception:
             logger.warning("Collection '%s' not found", collection_name)
             return []
 
+        if self._embedder is None:
+            raise RuntimeError("Embedder not loaded — cannot embed query. Check startup logs.")
+
+        count = collection.count()
+        if count == 0:
+            logger.warning("Collection '%s' is empty", collection_name)
+            return []
+
         query_embedding = self._embedder.embed_query(query_text)
 
         results = collection.query(
             query_embeddings=[query_embedding],
-            n_results=min(top_k, collection.count()),
+            n_results=min(top_k, count),
             include=["documents", "metadatas", "distances"],
         )
 
         return self._parse_results(results, collection_name)
 
     def query_all_collections(self, query_text: str, top_k: int = 10) -> List[RetrievedChunk]:
-        """Query all existing collections and merge results.
-
-        Results are globally sorted by cosine similarity score before truncation
-        to *top_k*.
-
-        Args:
-            query_text: Natural-language query.
-            top_k: Maximum number of results to return across all collections.
-
-        Returns:
-            Top-k merged and sorted :class:`RetrievedChunk` objects.
-        """
+        """Query every collection and merge, keeping the globally top-k results."""
         collections = self.list_collections()
         if not collections:
             logger.info("No collections found for query_all_collections")
@@ -154,39 +106,24 @@ class ChromaVectorStore:
 
         all_chunks: List[RetrievedChunk] = []
         for col_name in collections:
-            chunks = self.query(query_text, col_name, top_k=top_k)
-            all_chunks.extend(chunks)
+            all_chunks.extend(self.query(query_text, col_name, top_k=top_k))
 
-        # Sort by descending score and truncate
         all_chunks.sort(key=lambda c: c.score, reverse=True)
         return all_chunks[:top_k]
 
-    # ------------------------------------------------------------------
-    # Management
-    # ------------------------------------------------------------------
-
     def list_collections(self) -> List[str]:
-        """Return names of all existing collections."""
         try:
             collections = self._client.list_collections()
-            # chromadb >= 0.5 returns Collection objects; older returns strings
+            # chromadb >= 0.5 returns Collection objects; older returns plain strings
             names: List[str] = []
             for col in collections:
-                if hasattr(col, "name"):
-                    names.append(col.name)
-                else:
-                    names.append(str(col))
+                names.append(col.name if hasattr(col, "name") else str(col))
             return names
         except Exception as exc:
             logger.error("Error listing collections: %s", exc)
             return []
 
     def delete_collection(self, name: str) -> bool:
-        """Delete a collection by name.
-
-        Returns:
-            ``True`` if deleted successfully, ``False`` otherwise.
-        """
         try:
             self._client.delete_collection(name=name)
             logger.info("Deleted collection: %s", name)
@@ -196,14 +133,6 @@ class ChromaVectorStore:
             return False
 
     def get_collection_info(self, name: str) -> Dict:
-        """Return metadata for a collection.
-
-        Args:
-            name: Collection name.
-
-        Returns:
-            Dictionary with ``name`` and ``document_count`` keys.
-        """
         try:
             collection = self._client.get_collection(name=name)
             return {"name": name, "document_count": collection.count()}
@@ -211,13 +140,8 @@ class ChromaVectorStore:
             logger.error("Error getting info for collection '%s': %s", name, exc)
             return {"name": name, "document_count": 0, "error": str(exc)}
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _parse_results(results: Dict, collection_name: str) -> List[RetrievedChunk]:
-        """Convert raw ChromaDB query results into :class:`RetrievedChunk` objects."""
         chunks: List[RetrievedChunk] = []
 
         documents = results.get("documents", [[]])[0]
@@ -225,10 +149,9 @@ class ChromaVectorStore:
         distances = results.get("distances", [[]])[0]
 
         for doc, meta, dist in zip(documents, metadatas, distances):
-            # ChromaDB cosine distance: 0 = identical, 2 = opposite
-            # Convert to a similarity score in [0, 1]
+            # ChromaDB returns cosine distance (0 = identical, 2 = opposite);
+            # convert to a [0, 1] similarity score
             score = max(0.0, 1.0 - (dist / 2.0))
-
             chunks.append(
                 RetrievedChunk(
                     text=doc,

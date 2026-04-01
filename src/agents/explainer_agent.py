@@ -1,4 +1,3 @@
-"""Explainer agent: explains concepts based on lecture materials."""
 from __future__ import annotations
 
 import logging
@@ -12,20 +11,10 @@ logger = logging.getLogger(__name__)
 
 
 class ExplainerAgent(BaseAgent):
-    """Explains concepts from lecture materials in German, always citing sources.
-
-    Args:
-        llm: Loaded :class:`LocalLLM` instance.
-        max_tokens: Maximum tokens for LLM response (default 1024).
-    """
 
     def __init__(self, llm: LocalLLM, max_tokens: int = 1024) -> None:
         self._llm = llm
         self._max_tokens = max_tokens
-
-    # ------------------------------------------------------------------
-    # BaseAgent interface
-    # ------------------------------------------------------------------
 
     @property
     def name(self) -> str:
@@ -40,15 +29,6 @@ class ExplainerAgent(BaseAgent):
         return "explainer"
 
     def run(self, query: str, retrieved_chunks: List[RetrievedChunk]) -> AgentResponse:
-        """Generate an explanation for *query* using *retrieved_chunks*.
-
-        Args:
-            query: The student's question.
-            retrieved_chunks: Context chunks from the retrieval + reranking step.
-
-        Returns:
-            :class:`AgentResponse` with the explanation and cited sources.
-        """
         logger.info("ExplainerAgent.run: query='%s', chunks=%d", query, len(retrieved_chunks))
 
         context = self._format_context(retrieved_chunks)

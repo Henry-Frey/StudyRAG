@@ -1,4 +1,3 @@
-"""Text chunking utilities using LangChain's RecursiveCharacterTextSplitter."""
 from __future__ import annotations
 
 import logging
@@ -12,8 +11,6 @@ logger = logging.getLogger(__name__)
 
 
 class TextChunk(BaseModel):
-    """A single chunk of text derived from a parsed PDF page."""
-
     text: str
     source_file: str
     page_number: int
@@ -22,20 +19,18 @@ class TextChunk(BaseModel):
 
 
 class TextChunker:
-    """Splits :class:`ParsedPage` objects into overlapping :class:`TextChunk` instances.
+    """Splits pages into overlapping chunks using LangChain's RecursiveCharacterTextSplitter.
 
-    Uses :class:`langchain.text_splitter.RecursiveCharacterTextSplitter` under
-    the hood so that natural boundaries (paragraphs, sentences, words) are
-    preferred over hard character cuts.
-
-    Args:
-        chunk_size: Maximum number of characters per chunk (default 512).
-        chunk_overlap: Number of characters shared between adjacent chunks
-            (default 50).
+    Recursive splitting tries paragraph breaks first, then sentences, then words —
+    so chunks stay semantically coherent rather than cutting mid-sentence.
     """
 
     def __init__(self, chunk_size: int = 512, chunk_overlap: int = 50) -> None:
-        from langchain.text_splitter import RecursiveCharacterTextSplitter
+        # langchain_text_splitters is the package name since langchain 0.2
+        try:
+            from langchain_text_splitters import RecursiveCharacterTextSplitter
+        except ImportError:
+            from langchain.text_splitter import RecursiveCharacterTextSplitter
 
         self._splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
@@ -52,17 +47,6 @@ class TextChunker:
         )
 
     def chunk(self, pages: List[ParsedPage]) -> List[TextChunk]:
-        """Split a list of parsed pages into text chunks.
-
-        Each chunk inherits the metadata (source_file, page_number,
-        lecture_title) from its originating page.
-
-        Args:
-            pages: Ordered list of :class:`ParsedPage` objects.
-
-        Returns:
-            Flat list of :class:`TextChunk` objects across all pages.
-        """
         chunks: List[TextChunk] = []
         global_chunk_index = 0
 
@@ -94,9 +78,5 @@ class TextChunker:
                 )
                 global_chunk_index += 1
 
-        logger.info(
-            "Chunking complete: %d pages -> %d chunks",
-            len(pages),
-            len(chunks),
-        )
+        logger.info("Chunking complete: %d pages -> %d chunks", len(pages), len(chunks))
         return chunks

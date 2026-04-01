@@ -1,4 +1,4 @@
-"""PDF parsing utilities using PyMuPDF (fitz)."""
+"""PDF text extraction via PyMuPDF."""
 from __future__ import annotations
 
 import io
@@ -10,13 +10,12 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# pages with less text than this are probably cover images or blank slides
 _MIN_PAGE_TEXT_LENGTH = 10
 
 
 @dataclass
 class ParsedPage:
-    """Represents a single parsed page from a PDF document."""
-
     text: str
     page_number: int
     source_file: str
@@ -24,33 +23,15 @@ class ParsedPage:
 
 
 class PDFParser:
-    """Parses PDF files into a list of :class:`ParsedPage` objects.
-
-    Uses PyMuPDF (fitz) for extraction.  Pages with fewer than
-    ``_MIN_PAGE_TEXT_LENGTH`` characters of text are silently skipped.
-    """
 
     def parse_pdf(self, file_path: Path) -> list[ParsedPage]:
-        """Parse a PDF file from disk.
-
-        Args:
-            file_path: Absolute or relative path to the PDF.
-
-        Returns:
-            Ordered list of :class:`ParsedPage` instances (empty pages excluded).
-
-        Raises:
-            FileNotFoundError: If *file_path* does not exist.
-            RuntimeError: If PyMuPDF cannot open the file.
-        """
         file_path = Path(file_path)
         if not file_path.exists():
             raise FileNotFoundError(f"PDF not found: {file_path}")
 
         logger.info("Parsing PDF file: %s", file_path)
         try:
-            import fitz  # PyMuPDF
-
+            import fitz
             doc = fitz.open(str(file_path))
             return self._extract_pages(doc, file_path.name)
         except Exception as exc:
@@ -58,42 +39,24 @@ class PDFParser:
             raise RuntimeError(f"Failed to parse PDF {file_path}: {exc}") from exc
 
     def parse_pdf_bytes(self, content: bytes, filename: str) -> list[ParsedPage]:
-        """Parse a PDF from raw bytes (e.g. an HTTP upload).
-
-        Args:
-            content: Raw PDF bytes.
-            filename: Original filename used for title extraction.
-
-        Returns:
-            Ordered list of :class:`ParsedPage` instances.
-
-        Raises:
-            RuntimeError: If PyMuPDF cannot open the byte stream.
-        """
+        """Used for uploads — avoids writing to disk."""
         logger.info("Parsing PDF from bytes: filename=%s, size=%d B", filename, len(content))
         try:
-            import fitz  # PyMuPDF
-
+            import fitz
             doc = fitz.open(stream=io.BytesIO(content), filetype="pdf")
             return self._extract_pages(doc, filename)
         except Exception as exc:
             logger.error("Failed to parse PDF bytes (%s): %s", filename, exc)
             raise RuntimeError(f"Failed to parse PDF bytes ({filename}): {exc}") from exc
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
-    def _extract_pages(self, doc: object, filename: str) -> list[ParsedPage]:  # noqa: ANN001
-        """Extract text from every page of an open fitz document."""
+    def _extract_pages(self, doc: object, filename: str) -> list[ParsedPage]:
         lecture_title = self._extract_lecture_title(filename)
         pages: list[ParsedPage] = []
 
         for page_index in range(len(doc)):  # type: ignore[arg-type]
             try:
                 page = doc[page_index]  # type: ignore[index]
-                text: str = page.get_text()  # type: ignore[attr-defined]
-                text = text.strip()
+                text: str = page.get_text().strip()  # type: ignore[attr-defined]
 
                 if len(text) < _MIN_PAGE_TEXT_LENGTH:
                     logger.debug(
@@ -119,17 +82,7 @@ class PDFParser:
         return pages
 
     def _extract_lecture_title(self, filename: str) -> str:
-        """Derive a human-readable lecture title from a filename.
-
-        Strips the file extension, then replaces underscores and hyphens with
-        spaces, and normalises multiple spaces.
-
-        Examples::
-
-            "Introduction_to_ML.pdf"  -> "Introduction to ML"
-            "lecture-03-neural-nets.pdf" -> "lecture 03 neural nets"
-        """
+        """Turn a filename into a readable title, e.g. 'intro_to_ML.pdf' -> 'intro to ML'."""
         stem = Path(filename).stem
         title = re.sub(r"[_\-]+", " ", stem)
-        title = re.sub(r"\s+", " ", title).strip()
-        return title
+        return re.sub(r"\s+", " ", title).strip()

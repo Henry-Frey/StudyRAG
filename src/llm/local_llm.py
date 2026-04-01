@@ -1,4 +1,4 @@
-"""Local LLM inference via llama-cpp-python."""
+"""llama-cpp-python wrapper for local GGUF inference."""
 from __future__ import annotations
 
 import logging
@@ -12,22 +12,12 @@ logger = logging.getLogger(__name__)
 
 
 class LLMResponse(BaseModel):
-    """Container for a completed LLM generation."""
-
     text: str
     tokens_used: int
     generation_time_ms: float
 
 
 class LocalLLM:
-    """Wrapper around :class:`llama_cpp.Llama` for local GGUF model inference.
-
-    Args:
-        model_path: Path to the ``.gguf`` model file.
-        n_gpu_layers: Number of layers to offload to GPU (``-1`` = all).
-        n_ctx: Context window size in tokens.
-        temperature: Default sampling temperature.
-    """
 
     def __init__(
         self,
@@ -45,15 +35,11 @@ class LocalLLM:
         if not self._model_path.exists():
             logger.warning(
                 "LLM model file not found at '%s'. "
-                "Call generate() will raise until the file is available.",
+                "generate() will raise until the file is available.",
                 self._model_path,
             )
         else:
             self._load_model()
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def generate(
         self,
@@ -61,19 +47,6 @@ class LocalLLM:
         max_tokens: int = 1024,
         temperature: Optional[float] = None,
     ) -> LLMResponse:
-        """Generate a completion for *prompt*.
-
-        Args:
-            prompt: Full prompt string (including any instruction formatting).
-            max_tokens: Maximum number of tokens to generate.
-            temperature: Override the instance default temperature.
-
-        Returns:
-            :class:`LLMResponse` with generated text, token count and timing.
-
-        Raises:
-            RuntimeError: If the model is not loaded.
-        """
         self._ensure_loaded()
         temp = temperature if temperature is not None else self._default_temperature
 
@@ -91,33 +64,13 @@ class LocalLLM:
         text: str = output["choices"][0]["text"]
         tokens_used: int = output.get("usage", {}).get("total_tokens", 0)
 
-        logger.info(
-            "Generation complete: %d tokens in %.0f ms",
-            tokens_used,
-            elapsed_ms,
-        )
+        logger.info("Generation complete: %d tokens in %.0f ms", tokens_used, elapsed_ms)
         return LLMResponse(text=text, tokens_used=tokens_used, generation_time_ms=elapsed_ms)
 
-    def generate_stream(
-        self,
-        prompt: str,
-        max_tokens: int = 1024,
-    ) -> Iterator[str]:
-        """Yield generated text tokens one by one (streaming mode).
-
-        Args:
-            prompt: Full prompt string.
-            max_tokens: Maximum number of tokens to generate.
-
-        Yields:
-            Individual text fragments as they are generated.
-
-        Raises:
-            RuntimeError: If the model is not loaded.
-        """
+    def generate_stream(self, prompt: str, max_tokens: int = 1024) -> Iterator[str]:
         self._ensure_loaded()
-
         logger.debug("Starting streaming generation (max_tokens=%d)", max_tokens)
+
         for chunk in self._llm(  # type: ignore[operator]
             prompt,
             max_tokens=max_tokens,
@@ -125,20 +78,13 @@ class LocalLLM:
             stream=True,
             echo=False,
         ):
-            token_text: str = chunk["choices"][0]["text"]
-            if token_text:
+            if token_text := chunk["choices"][0]["text"]:
                 yield token_text
 
     def is_loaded(self) -> bool:
-        """Return ``True`` if the underlying Llama model is ready."""
         return self._llm is not None
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
     def _load_model(self) -> None:
-        """Load the GGUF model from disk into memory."""
         try:
             from llama_cpp import Llama  # type: ignore
 
@@ -155,7 +101,6 @@ class LocalLLM:
             raise RuntimeError(f"Failed to load LLM model: {exc}") from exc
 
     def _ensure_loaded(self) -> None:
-        """Raise :class:`RuntimeError` if the model is not ready."""
         if self._llm is None:
             if not self._model_path.exists():
                 raise RuntimeError(
@@ -166,10 +111,7 @@ class LocalLLM:
 
 
 class PromptTemplateManager:
-    """Builds Mistral-Instruct formatted prompts for each agent type.
-
-    All prompts use the ``[INST] … [/INST]`` Mistral instruction format.
-    """
+    """Builds Mistral-Instruct [INST]…[/INST] prompts for each agent type."""
 
     _EXPLAINER_SYSTEM = (
         "Du bist ein hilfreicher Lernassistent für Studenten. "
@@ -203,15 +145,6 @@ class PromptTemplateManager:
 
     @classmethod
     def get_explainer_prompt(cls, query: str, context: str) -> str:
-        """Build an explainer prompt in Mistral-Instruct format.
-
-        Args:
-            query: The student's question.
-            context: Numbered context passages from retrieved chunks.
-
-        Returns:
-            Formatted prompt string.
-        """
         user_message = (
             f"{cls._EXPLAINER_SYSTEM}\n\n"
             f"Kontext aus den Vorlesungsmaterialien:\n{context}\n\n"
@@ -221,15 +154,6 @@ class PromptTemplateManager:
 
     @classmethod
     def get_quiz_prompt(cls, topic: str, context: str) -> str:
-        """Build a quiz-generation prompt in Mistral-Instruct format.
-
-        Args:
-            topic: The topic for which to generate quiz questions.
-            context: Numbered context passages from retrieved chunks.
-
-        Returns:
-            Formatted prompt string.
-        """
         user_message = (
             f"{cls._QUIZ_SYSTEM}\n\n"
             f"Vorlesungsmaterial:\n{context}\n\n"
@@ -239,15 +163,6 @@ class PromptTemplateManager:
 
     @classmethod
     def get_connector_prompt(cls, query: str, context: str) -> str:
-        """Build a connector-agent prompt in Mistral-Instruct format.
-
-        Args:
-            query: The student's question about cross-topic connections.
-            context: Numbered context passages from multiple retrieved chunks.
-
-        Returns:
-            Formatted prompt string.
-        """
         user_message = (
             f"{cls._CONNECTOR_SYSTEM}\n\n"
             f"Materialien aus verschiedenen Vorlesungen:\n{context}\n\n"

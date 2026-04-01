@@ -56,6 +56,10 @@ coverage.xml
 models/
 data/chroma_db/
 
+# Node
+frontend-react/node_modules/
+frontend-react/dist/
+
 # IDEs
 .idea/
 .vscode/

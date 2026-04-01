@@ -1,4 +1,4 @@
-"""Application configuration using Pydantic BaseSettings."""
+"""App settings, loaded from .env."""
 from __future__ import annotations
 
 import logging
@@ -10,8 +10,6 @@ logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
-    """Central configuration loaded from environment variables / .env file."""
-
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -46,7 +44,6 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Return a cached singleton Settings instance."""
     settings = Settings()
     logger.info("Configuration loaded: model_path=%s", settings.llm_model_path)
     return settings

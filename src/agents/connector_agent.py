@@ -1,4 +1,3 @@
-"""Connector agent: finds cross-connections between lecture concepts."""
 from __future__ import annotations
 
 import logging
@@ -12,26 +11,15 @@ logger = logging.getLogger(__name__)
 
 
 class ConnectorAgent(BaseAgent):
-    """Identifies connections between concepts across different lecture materials.
+    """Finds connections between concepts across multiple lectures.
 
-    This agent deliberately uses a larger set of retrieved chunks (``top_k * 2``)
-    so that it can draw from diverse sources when finding cross-topic connections.
-
-    Args:
-        llm: Loaded :class:`LocalLLM` instance.
-        max_tokens: Maximum tokens for the LLM response (default 1536).
-        top_k_multiplier: Multiplier applied to the caller-supplied chunk count
-            to encourage broader retrieval.  Not used directly here (the caller
-            should pass more chunks), but documented for clarity.
+    Uses top_k * 2 chunks (set by the caller in routes.py) to cast a wider
+    net than the other agents.
     """
 
     def __init__(self, llm: LocalLLM, max_tokens: int = 1536) -> None:
         self._llm = llm
         self._max_tokens = max_tokens
-
-    # ------------------------------------------------------------------
-    # BaseAgent interface
-    # ------------------------------------------------------------------
 
     @property
     def name(self) -> str:
@@ -46,19 +34,6 @@ class ConnectorAgent(BaseAgent):
         return "connector"
 
     def run(self, query: str, retrieved_chunks: List[RetrievedChunk]) -> AgentResponse:
-        """Find cross-connections for *query* using *retrieved_chunks*.
-
-        The agent groups chunks by lecture title in the context prompt to make
-        cross-lecture connections more explicit for the LLM.
-
-        Args:
-            query: The student's question about concept relationships.
-            retrieved_chunks: Context chunks – ideally from multiple lectures
-                (``top_k * 2`` recommended).
-
-        Returns:
-            :class:`AgentResponse` describing cross-topic connections.
-        """
         logger.info(
             "ConnectorAgent.run: query='%s', chunks=%d", query, len(retrieved_chunks)
         )
@@ -89,19 +64,8 @@ class ConnectorAgent(BaseAgent):
             agent_type=self.agent_type,
         )
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
     def _build_grouped_context(self, chunks: List[RetrievedChunk]) -> str:
-        """Group chunks by lecture title for a more structured context prompt.
-
-        Args:
-            chunks: Retrieved chunks (ideally from multiple lectures).
-
-        Returns:
-            Multi-section context string with one section per lecture.
-        """
+        """Group chunks by lecture so the LLM can see clear source boundaries."""
         if not chunks:
             return "Keine relevanten Quellen gefunden."
 

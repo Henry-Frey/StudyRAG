@@ -1,4 +1,3 @@
-"""Sliding-window rate limiter for FastAPI."""
 from __future__ import annotations
 
 import logging
@@ -13,21 +12,17 @@ from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# Module-level singleton so all routes share the same limiter instance
+# singleton shared across all requests — created lazily on first use
 _rate_limiter_instance: "SlidingWindowRateLimiter | None" = None
 _limiter_lock = threading.Lock()
 
 
 class SlidingWindowRateLimiter:
-    """Thread-safe sliding-window rate limiter.
+    """Per-client sliding window rate limiter.
 
-    Tracks request timestamps per *client_id* in a :class:`collections.deque`.
-    Timestamps older than *window_seconds* are pruned on each call to
-    :meth:`is_allowed`.
-
-    Args:
-        max_requests: Maximum number of allowed requests within the window.
-        window_seconds: Duration of the sliding window in seconds (default 60).
+    Stores a deque of timestamps per client IP. On each call the deque is
+    pruned of anything older than the window, then checked against the limit.
+    Using monotonic time avoids issues with clock adjustments.
     """
 
     def __init__(self, max_requests: int, window_seconds: int = 60) -> None:
@@ -36,32 +31,16 @@ class SlidingWindowRateLimiter:
         self._client_windows: Dict[str, Deque[float]] = {}
         self._lock = threading.Lock()
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def is_allowed(self, client_id: str) -> bool:
-        """Check whether *client_id* may make another request.
-
-        Prunes expired timestamps, then either records the new timestamp and
-        returns ``True``, or returns ``False`` if the limit is reached.
-
-        Args:
-            client_id: Unique identifier for the client (e.g. IP address).
-
-        Returns:
-            ``True`` if the request is within the rate limit, ``False`` otherwise.
-        """
         now = time.monotonic()
 
         with self._lock:
             if client_id not in self._client_windows:
                 self._client_windows[client_id] = deque()
 
-            window: Deque[float] = self._client_windows[client_id]
-
-            # Prune timestamps outside the current window
+            window = self._client_windows[client_id]
             cutoff = now - self._window_seconds
+
             while window and window[0] <= cutoff:
                 window.popleft()
 
@@ -78,7 +57,6 @@ class SlidingWindowRateLimiter:
             return True
 
     def get_request_count(self, client_id: str) -> int:
-        """Return the current request count for *client_id* within the window."""
         now = time.monotonic()
         with self._lock:
             window = self._client_windows.get(client_id, deque())
@@ -87,39 +65,27 @@ class SlidingWindowRateLimiter:
 
     @property
     def max_requests(self) -> int:
-        """Maximum requests allowed per window."""
         return self._max_requests
 
     @property
     def window_seconds(self) -> int:
-        """Window duration in seconds."""
         return self._window_seconds
 
 
-# ---------------------------------------------------------------------------
-# FastAPI dependencies
-# ---------------------------------------------------------------------------
-
-
 def get_rate_limiter() -> SlidingWindowRateLimiter:
-    """Return the singleton :class:`SlidingWindowRateLimiter`.
-
-    Creates the instance on first call using settings from :func:`get_settings`.
-    """
+    """Return the process-wide limiter, creating it on first call."""
     global _rate_limiter_instance
 
     if _rate_limiter_instance is None:
         with _limiter_lock:
+            # double-checked locking — another thread may have created it
             if _rate_limiter_instance is None:
                 settings = get_settings()
                 _rate_limiter_instance = SlidingWindowRateLimiter(
                     max_requests=settings.rate_limit_per_minute,
                     window_seconds=60,
                 )
-                logger.info(
-                    "Rate limiter created: %d req/min",
-                    settings.rate_limit_per_minute,
-                )
+                logger.info("Rate limiter created: %d req/min", settings.rate_limit_per_minute)
 
     return _rate_limiter_instance
 
@@ -128,13 +94,6 @@ async def rate_limit_dependency(
     request: Request,
     limiter: SlidingWindowRateLimiter = Depends(get_rate_limiter),
 ) -> None:
-    """FastAPI dependency that enforces rate limiting.
-
-    Uses the client's IP address as the ``client_id``.
-
-    Raises:
-        HTTPException: 429 Too Many Requests if the limit is exceeded.
-    """
     client_ip = request.client.host if request.client else "unknown"
     if not limiter.is_allowed(client_ip):
         raise HTTPException(

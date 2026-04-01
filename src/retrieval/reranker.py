@@ -1,4 +1,3 @@
-"""Cross-encoder reranker for improving retrieval precision."""
 from __future__ import annotations
 
 import logging
@@ -10,14 +9,11 @@ logger = logging.getLogger(__name__)
 
 
 class CrossEncoderReranker:
-    """Reranks retrieved chunks using a cross-encoder model.
+    """Re-scores retrieved chunks with a cross-encoder for higher precision.
 
-    A cross-encoder jointly encodes the query and each candidate chunk, giving
-    a more accurate relevance signal than the bi-encoder used during retrieval.
-
-    Args:
-        model_name: HuggingFace cross-encoder model identifier (e.g.
-            ``"cross-encoder/ms-marco-MiniLM-L-6-v2"``).
+    The bi-encoder used during retrieval is fast but approximate; the
+    cross-encoder reads query + chunk together and gives a better relevance
+    signal at the cost of being slower (run on top-k only, not the full index).
     """
 
     def __init__(self, model_name: str) -> None:
@@ -28,26 +24,11 @@ class CrossEncoderReranker:
         self._model_name = model_name
         logger.info("Cross-encoder reranker loaded: %s", model_name)
 
-    def rerank(
-        self,
-        query: str,
-        chunks: List[RetrievedChunk],
-        top_k: int = 5,
-    ) -> List[RetrievedChunk]:
-        """Rerank *chunks* by their cross-encoder score for *query*.
+    def rerank(self, query: str, chunks: List[RetrievedChunk], top_k: int = 5) -> List[RetrievedChunk]:
+        """Score every (query, chunk) pair and return the top_k by score.
 
-        Scores each (query, chunk.text) pair using the cross-encoder.  The
-        top-*top_k* chunks, sorted by descending score, are returned with their
-        ``reranker_score`` field populated.
-
-        Args:
-            query: The user's query text.
-            chunks: Candidate chunks from the bi-encoder retrieval step.
-            top_k: Number of chunks to return after reranking.
-
-        Returns:
-            Up to *top_k* :class:`RetrievedChunk` objects sorted by
-            ``reranker_score`` (highest first).
+        Note: cross-encoder scores are raw logits (unbounded), not probabilities.
+        Don't display them as percentages.
         """
         if not chunks:
             return []
@@ -59,15 +40,12 @@ class CrossEncoderReranker:
             scores: list[float] = self._model.predict(pairs).tolist()
         except Exception as exc:
             logger.error("Cross-encoder prediction failed: %s", exc)
-            # Fall back to original ordering
             return chunks[:top_k]
 
-        # Attach reranker scores and sort
-        scored: list[tuple[float, RetrievedChunk]] = []
-        for score, chunk in zip(scores, chunks):
-            updated = chunk.model_copy(update={"reranker_score": float(score)})
-            scored.append((float(score), updated))
-
+        scored = [
+            (float(score), chunk.model_copy(update={"reranker_score": float(score)}))
+            for score, chunk in zip(scores, chunks)
+        ]
         scored.sort(key=lambda x: x[0], reverse=True)
         reranked = [chunk for _, chunk in scored[:top_k]]
 
@@ -81,5 +59,4 @@ class CrossEncoderReranker:
 
     @property
     def model_name(self) -> str:
-        """Name of the underlying cross-encoder model."""
         return self._model_name

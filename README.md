@@ -4,6 +4,8 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Docker](https://img.shields.io/badge/docker-ready-blue)
 
+![StudyRAG Interface](visual.png)
+
 Ein vollständig lokaler KI-Lernassistent, der Retrieval-Augmented Generation (RAG) nutzt, um Studierenden beim Verstehen von Vorlesungsmaterialien zu helfen – ohne Cloud-Abhängigkeit und mit vollständiger Datensouveränität.
 
 ---
